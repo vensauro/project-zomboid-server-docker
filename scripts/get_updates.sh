@@ -7,10 +7,12 @@
 ##                                            ##
 ########################333333##################
 
-DOCKER_IMAGE="danixu86/project-zomboid-dedicated-server"
+# Allow overriding the target image from the environment (e.g. when pushing to GHCR).
+# Format for GHCR: ghcr.io/<owner>/<image>
+DOCKER_IMAGE="${DOCKER_IMAGE:-danixu86/project-zomboid-dedicated-server}"
 PZ_URL_WEB="https://projectzomboid.com/blog/"
 PZ_URL_FORUM="https://theindiestone.com/forums/index.php?/forum/35-pz-updates/"
-BUILD_UNSTABLE_VERSIONS=true
+BUILD_UNSTABLE_VERSIONS="${BUILD_UNSTABLE_VERSIONS:-true}"
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd "${SCRIPT_DIR}/../"

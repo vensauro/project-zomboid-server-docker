@@ -2,11 +2,21 @@
 
 This Dockerfile downloads the Project Zombie dedicated server using SteamCMD. Will allow you to deploy with ease a server in Kubernetes, Docker...
 
-The ready to use image is available here:
+The ready to use image is available on the GitHub Container Registry:
 
-https://hub.docker.com/r/danixu86/project-zomboid-dedicated-server
+```
+ghcr.io/vensauro/project-zomboid-server-docker
+```
 
-> **Note:** If you want to play **Build 42** multiplayer, you must set the `STEAMAPPBRANCH` [environment variable](#environment-variables) to `unstable`.
+Pull it with:
+
+```bash
+docker pull ghcr.io/vensauro/project-zomboid-server-docker:latest
+```
+
+The original upstream image (`danixu86/project-zomboid-dedicated-server` on Docker Hub) is still compatible if you prefer it.
+
+> **Note:** If you want to play **Build 42** multiplayer, you must set the `STEAMAPPBRANCH` [environment variable](#environment-variables) to `unstable` (or use the `latest-unstable` tag).
 
 **WARNING:** Running the image on Windows using WSL2 in Docker Desktop will make the server startup times significantly slower. This is fine unless you are running alot of mods in which case server startup times may vary from 15 - 40 minutes. The best way to solve this problem is to run your container on a Linux based system or in a Linux VM.
 
@@ -151,4 +161,4 @@ In the scripts folders there are three scripts:
 
 * entry.sh: The script used in the image to start the server
 * search_folder.sh: Script to search through mod folders for any maps
-* get_updates.sh: will perform a search of the latest version on the forum and the website to download and build the latest stable and unstable version. The local image will be created and it will try to upload the image to the Dockerhub website, but it will fail by the lack of permissions.
+* get_updates.sh: will perform a search of the latest version on the forum and the website to download and build the latest stable and unstable version. The local image will be created and pushed to the registry defined by the `DOCKER_IMAGE` environment variable (defaults to the GitHub Container Registry image used by the CI workflow).
