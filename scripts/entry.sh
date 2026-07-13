@@ -255,4 +255,25 @@ chown -R 1000:1000 /home/steam/pz-dedicated/steamapps/workshop /home/steam/Zombo
 # Fix it the adding back `rwx` permissions for the file owner (steam user)
 chmod 755 /home/steam/Zomboid
 
-su - steam -c "export LANG=${LANG} && export LD_LIBRARY_PATH=\"${STEAMAPPDIR}/jre64/lib:${LD_LIBRARY_PATH}\" && cd ${STEAMAPPDIR} && pwd && ./start-server.sh ${ARGS}"
+# ---------------------------------------------------------------------------
+# Arch-specific runtime tuning.
+# On ARM64 (aarch64) the bundled JRE and the game binaries are x86_64 and run
+# under box64 emulation. The jre64/bin/java shim (installed by Dockerfile.arm64)
+# already wraps box64, so start-server.sh works unchanged; here we just export
+# the box64 JVM-friendly flags and extend LD_LIBRARY_PATH so box64 can locate
+# the game's native libraries. On amd64 behaviour is unchanged.
+# ---------------------------------------------------------------------------
+ARCH="$(uname -m)"
+RUN_EXPORTS="export LANG=${LANG}"
+if [ "${ARCH}" = "aarch64" ]; then
+  echo "*** INFO: ARM64 detected; running the server under box64 emulation ***"
+  export BOX64_JVM="${BOX64_JVM:-1}"
+  export BOX64_DYNAREC_BIGBLOCK="${BOX64_DYNAREC_BIGBLOCK:-0}"
+  export BOX64_DYNAREC_STRONGMEM="${BOX64_DYNAREC_STRONGMEM:-1}"
+  export LD_LIBRARY_PATH="${STEAMAPPDIR}/linux64:${STEAMAPPDIR}/natives:${LD_LIBRARY_PATH}"
+  RUN_EXPORTS="${RUN_EXPORTS} BOX64_JVM=\"${BOX64_JVM}\" BOX64_DYNAREC_BIGBLOCK=\"${BOX64_DYNAREC_BIGBLOCK}\" BOX64_DYNAREC_STRONGMEM=\"${BOX64_DYNAREC_STRONGMEM}\""
+fi
+
+# `su -` starts a login shell which resets the environment, so every variable
+# the server needs must be re-exported inside the command string.
+su - steam -c "${RUN_EXPORTS} && export LD_LIBRARY_PATH=\"${LD_LIBRARY_PATH}\" && cd ${STEAMAPPDIR} && pwd && ./start-server.sh ${ARGS}"

@@ -1,0 +1,183 @@
+############################################################
+# Dockerfile that builds a Project Zomboid Gameserver for ARM64
+#
+# SteamCMD and the Zomboid dedicated server only ship x86/x64
+# binaries, so on ARM64 we emulate them with Box86 (x86, used for
+# SteamCMD) and Box64 (x64, used for Zomboid's bundled JRE),
+# following the same approach as
+# https://github.com/Dyarven/zomboid-server-on-arm
+#
+# Because Docker build runs unprivileged (no binfmt_misc), the x86
+# and x64 binaries are wrapped with small shell shims that invoke
+# box86/box64 explicitly. The runtime layout matches the upstream
+# cm2network/steamcmd image so the same entry.sh is shared.
+#
+# Build natively on an ARM64 host (e.g. the GitHub-hosted
+# ubuntu-24.04-arm runner) -- do NOT cross-build via QEMU, the
+# Box86/Box64 compile would be extremely slow.
+############################################################
+FROM ubuntu:22.04
+
+LABEL maintainer="vensauro"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Mirror the cm2network/steamcmd image layout so entry.sh works unchanged
+ENV USER=steam
+ENV HOMEDIR=/home/steam
+ENV STEAMCMDDIR=/home/steam/steamcmd
+ENV STEAMAPPID=380870
+ENV STEAMAPP=pz
+ENV STEAMAPPDIR=/home/steam/pz-dedicated
+ENV HOME=/home/steam
+
+# Receive the value from docker-compose as an ARG
+ARG STEAMAPPBRANCH="public"
+# Promote the ARG value to an ENV for runtime
+ENV STEAMAPPBRANCH=$STEAMAPPBRANCH
+
+# Box64 tuning for the JVM (same values used by zomboid-server-on-arm).
+# entry.sh re-exports these for the runtime user.
+ENV BOX64_JVM=1
+ENV BOX64_DYNAREC_BIGBLOCK=0
+ENV BOX64_DYNAREC_STRONGMEM=1
+
+# ---------------------------------------------------------
+# 1. Base packages + locales
+# ---------------------------------------------------------
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends --no-install-suggests \
+    ca-certificates \
+    curl \
+    dos2unix \
+    locales \
+    sudo \
+    tzdata \
+  && sed -i 's/^# *\(es_ES.UTF-8\)/\1/' /etc/locale.gen \
+  && locale-gen \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------
+# 2. armhf multiarch: Box86 emits AArch32 code, so the x86
+#    SteamCMD binary needs 32-bit ARM shared libraries.
+# ---------------------------------------------------------
+RUN dpkg --add-architecture armhf \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends --no-install-suggests \
+    libc6:armhf \
+    libstdc++6:armhf \
+    libncurses5:armhf \
+    zlib1g:armhf \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------
+# 3. Build Box86 (x86 emulation, for SteamCMD) and
+#    Box64 (x64 emulation, for Zomboid's JRE).
+# ---------------------------------------------------------
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends --no-install-suggests \
+    git \
+    build-essential \
+    cmake \
+  && git clone --depth 1 https://github.com/ptitSeb/box86.git /tmp/box86 \
+  && cmake -S /tmp/box86 -B /tmp/box86/build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  && cmake --build /tmp/box86/build --parallel "$(nproc)" \
+  && cmake --install /tmp/box86/build \
+  && rm -rf /tmp/box86 \
+  && git clone --depth 1 https://github.com/ptitSeb/box64.git /tmp/box64 \
+  && cmake -S /tmp/box64 -B /tmp/box64/build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  && cmake --build /tmp/box64/build --parallel "$(nproc)" \
+  && cmake --install /tmp/box64/build \
+  && rm -rf /tmp/box64 \
+  && apt-get purge -y --auto-remove git build-essential cmake \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------
+# 4. Create the steam user and folder layout
+# ---------------------------------------------------------
+RUN set -x \
+  && useradd -m -d "${HOMEDIR}" -s /bin/bash "${USER}" \
+  && mkdir -p "${STEAMCMDDIR}" "${STEAMAPPDIR}" /server/scripts \
+  && chown -R "${USER}:${USER}" "${HOMEDIR}"
+
+# ---------------------------------------------------------
+# 5. Install SteamCMD (linux32 build, runs under box86)
+# ---------------------------------------------------------
+USER ${USER}
+WORKDIR ${STEAMCMDDIR}
+RUN curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" \
+    | tar -zxvf -
+
+USER root
+
+# ---------------------------------------------------------
+# 6. Wrap the x86 SteamCMD binaries with box86 shims.
+#    steamcmd.sh is a bash wrapper that execs linux32/steamcmd,
+#    so wrapping the ELF binary is enough.
+# ---------------------------------------------------------
+RUN set -ex; \
+    for bin in steamcmd steamerror steam; do \
+      target="${STEAMCMDDIR}/linux32/${bin}"; \
+      if [ -f "${target}" ] && [ ! -e "${target}.real" ]; then \
+        mv "${target}" "${target}.real"; \
+        printf '#!/bin/sh\nexec box86 "%s.real" "$@"\n' "${target}" > "${target}"; \
+        chmod +x "${target}"; \
+      fi; \
+    done
+
+# ---------------------------------------------------------
+# 7. Download the Project Zomboid dedicated server as the steam
+#    user. Docker ENV vars (STEAMCMDDIR, STEAMAPPDIR, ...) are
+#    preserved across USER switches, so no `su` is needed and
+#    the resulting files are owned by steam.
+# ---------------------------------------------------------
+USER ${USER}
+RUN bash "${STEAMCMDDIR}/steamcmd.sh" \
+    +force_install_dir "${STEAMAPPDIR}" \
+    +login anonymous \
+    +app_update "${STEAMAPPID}" -beta "${STEAMAPPBRANCH}" validate \
+    +quit
+
+USER root
+
+# Symlink expected by some Zomboid builds
+RUN set -ex; \
+    if [ -f "${STEAMAPPDIR}/linux64/steamclient.so" ]; then \
+      ln -sf "${STEAMAPPDIR}/linux64/steamclient.so" "${STEAMAPPDIR}/linux64/libsteam.so"; \
+    fi
+
+# ---------------------------------------------------------
+# 8. Wrap Zomboid's bundled JRE with box64. start-server.sh
+#    invokes jre64/bin/java, so the shim makes the x64 JRE run
+#    through box64 transparently.
+# ---------------------------------------------------------
+RUN set -ex; \
+    target="${STEAMAPPDIR}/jre64/bin/java"; \
+    if [ -f "${target}" ] && [ ! -e "${target}.real" ]; then \
+      mv "${target}" "${target}.real"; \
+      printf '#!/bin/sh\nexec box64 "%s.real" "$@"\n' "${target}" > "${target}"; \
+      chmod +x "${target}"; \
+    fi
+
+# ---------------------------------------------------------
+# 9. Copy the entry point and helper scripts (shared with amd64)
+# ---------------------------------------------------------
+COPY --chown=${USER}:${USER} scripts/entry.sh /server/scripts/entry.sh
+RUN chmod 550 /server/scripts/entry.sh
+
+COPY --chown=${USER}:${USER} scripts/search_folder.sh /server/scripts/search_folder.sh
+RUN chmod 550 /server/scripts/search_folder.sh
+
+# Create required folders to keep their permissions on mount
+RUN mkdir -p "${HOMEDIR}/Zomboid" && chown -R "${USER}:${USER}" "${HOMEDIR}"
+
+WORKDIR ${HOMEDIR}
+
+# Expose ports
+EXPOSE 16261-16262/udp \
+  27015/tcp
+
+ENTRYPOINT ["/server/scripts/entry.sh"]

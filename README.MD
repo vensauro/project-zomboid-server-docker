@@ -14,9 +14,30 @@ Pull it with:
 docker pull ghcr.io/vensauro/project-zomboid-server-docker:latest
 ```
 
+> To `docker pull` without authentication on the VPS, the package must be set to **Public** in GitHub under `https://github.com/users/vensauro/packages/container/project-zomboid-server-docker/settings`. Otherwise authenticate with a Personal Access Token that has `read:packages` scope.
+
 The original upstream image (`danixu86/project-zomboid-dedicated-server` on Docker Hub) is still compatible if you prefer it.
 
 > **Note:** If you want to play **Build 42** multiplayer, you must set the `STEAMAPPBRANCH` [environment variable](#environment-variables) to `unstable` (or use the `latest-unstable` tag).
+
+## Multi-architecture support (amd64 + arm64)
+
+The published image is a single **multi-arch manifest**, so the correct architecture is pulled automatically:
+
+| Tag | amd64 (x86_64) | arm64 (aarch64) |
+| --- | :---: | :---: |
+| `latest` | Native | Box86 + Box64 emulation |
+| `latest-unstable` | Native | Box86 + Box64 emulation |
+
+On **amd64** the image runs the SteamCMD and Zomboid binaries natively.
+
+On **arm64** (Raspberry Pi 4/5, OCI Ampere A1, AWS Graviton, Apple Silicon via Docker, ...) the SteamCMD and Zomboid binaries are x86/x64, so they run through [Box86](https://github.com/ptitSeb/box86) and [Box64](https://github.com/ptitSeb/box64) emulation, following the approach from [`Dyarven/zomboid-server-on-arm`](https://github.com/Dyarven/zomboid-server-on-arm). Both emulators are built from source and baked into the arm64 image, and the game's bundled JRE is wrapped so `start-server.sh` works unchanged.
+
+Caveats for arm64:
+
+* Performance is lower than a native x86_64 server (emulation overhead). Expect longer startup times and higher CPU usage.
+* Build is performed natively on GitHub's `ubuntu-24.04-arm` runner (no QEMU), which keeps build times reasonable.
+* The arm64 image is based on `ubuntu:22.04` (instead of `cm2network/steamcmd`) because Box86 needs the 32-bit ARM (`armhf`) system libraries.
 
 **WARNING:** Running the image on Windows using WSL2 in Docker Desktop will make the server startup times significantly slower. This is fine unless you are running alot of mods in which case server startup times may vary from 15 - 40 minutes. The best way to solve this problem is to run your container on a Linux based system or in a Linux VM.
 
@@ -94,6 +115,15 @@ This will work only when using the `docker compose` command. If you are building
 
 ```bash
 docker build --compress --no-cache --build-arg STEAMAPPBRANCH=unstable .
+```
+
+There are two Dockerfiles:
+
+* `Dockerfile` for **amd64** (x86_64). Based on `cm2network/steamcmd`.
+* `Dockerfile.arm64` for **arm64** (aarch64). Based on `ubuntu:22.04`, builds Box86/Box64 and emulates the x86/x64 binaries. Build it on a native ARM64 host:
+
+```bash
+docker build --no-cache --build-arg STEAMAPPBRANCH=unstable -f Dockerfile.arm64 -t ghcr.io/vensauro/project-zomboid-server-docker:unstable-arm64 .
 ```
 
 ## Soft Reset
