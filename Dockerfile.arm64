@@ -128,15 +128,21 @@ RUN curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.t
 USER root
 
 # ---------------------------------------------------------
-# 6. Wrap every x86 (i386) SteamCMD ELF binary with a
+# 6. Wrap every x86 (i386) SteamCMD executable ELF with a
 #    qemu-i386-static shim. steamcmd.sh is a bash wrapper that
 #    execs linux32/steamcmd, so wrapping the ELF is enough; any
 #    other i386 helper steamcmd may spawn lives in linux32/ too
 #    and is wrapped by the same loop. (binfmt_misc not required)
+#
+#    IMPORTANT: only executables are wrapped. Shared libraries
+#    (*.so*) must be left untouched -- wrapping them would turn
+#    them into text scripts and the dynamic linker would fail to
+#    load them, crashing steamcmd instantly.
 # ---------------------------------------------------------
 RUN set -ex; \
     for f in "${STEAMCMDDIR}/linux32"/*; do \
       [ -f "$f" ] || continue; \
+      case "$(basename "$f")" in *.so|*.so.*) continue;; esac; \
       [ -e "${f}.real" ] && continue; \
       magic="$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')"; \
       if [ "${magic}" = "7f454c46" ]; then \
