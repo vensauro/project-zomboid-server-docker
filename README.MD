@@ -26,18 +26,23 @@ The published image is a single **multi-arch manifest**, so the correct architec
 
 | Tag | amd64 (x86_64) | arm64 (aarch64) |
 | --- | :---: | :---: |
-| `latest` | Native | Box86 + Box64 emulation |
-| `latest-unstable` | Native | Box86 + Box64 emulation |
+| `latest` | Native | QEMU i386 + Box64 emulation |
+| `latest-unstable` | Native | QEMU i386 + Box64 emulation |
 
 On **amd64** the image runs the SteamCMD and Zomboid binaries natively.
 
-On **arm64** (Raspberry Pi 4/5, OCI Ampere A1, AWS Graviton, Apple Silicon via Docker, ...) the SteamCMD and Zomboid binaries are x86/x64, so they run through [Box86](https://github.com/ptitSeb/box86) and [Box64](https://github.com/ptitSeb/box64) emulation, following the approach from [`Dyarven/zomboid-server-on-arm`](https://github.com/Dyarven/zomboid-server-on-arm). Both emulators are built from source and baked into the arm64 image, and the game's bundled JRE is wrapped so `start-server.sh` works unchanged.
+On **arm64** (Raspberry Pi 4/5, OCI Ampere A1, AWS Graviton, Apple Silicon via Docker, ...) the SteamCMD and Zomboid binaries are x86/x64, so they run through emulation:
+
+* **SteamCMD** (x86 32-bit) runs under **QEMU i386** user-mode emulation (`qemu-i386-static`). QEMU is pure software emulation and works on every ARM64 CPU, including Ampere Neoverse (N1/N2) and ARMv9 cores that lack the AArch32 mode Box86 would need.
+* **Zomboid server** (x86_64 JRE) runs under [**Box64**](https://github.com/ptitSeb/box64) (x86_64 → AArch64 dynarec), which is much faster than QEMU for the heavy Java workload.
+
+Box64 is built from source and baked into the arm64 image, and the game's bundled JRE and SteamCMD are wrapped with shell shims so `start-server.sh` works unchanged. The approach is adapted from [`Dyarven/zomboid-server-on-arm`](https://github.com/Dyarven/zomboid-server-on-arm) (which uses Box86+Box64 and therefore only works on AArch32-capable CPUs like the Raspberry Pi).
 
 Caveats for arm64:
 
 * Performance is lower than a native x86_64 server (emulation overhead). Expect longer startup times and higher CPU usage.
-* Build is performed natively on GitHub's `ubuntu-24.04-arm` runner (no QEMU), which keeps build times reasonable.
-* The arm64 image is based on `ubuntu:22.04` (instead of `cm2network/steamcmd`) because Box86 needs the 32-bit ARM (`armhf`) system libraries.
+* Build is performed natively on GitHub's `ubuntu-24.04-arm` runner (no QEMU-system, no cross-build), which keeps build times reasonable.
+* The arm64 image is based on `ubuntu:22.04` (instead of `cm2network/steamcmd`) because QEMU/Box64 need the foreign-architecture (`i386`) libraries, and Box64 is compiled in place.
 
 **WARNING:** Running the image on Windows using WSL2 in Docker Desktop will make the server startup times significantly slower. This is fine unless you are running alot of mods in which case server startup times may vary from 15 - 40 minutes. The best way to solve this problem is to run your container on a Linux based system or in a Linux VM.
 
@@ -120,7 +125,7 @@ docker build --compress --no-cache --build-arg STEAMAPPBRANCH=unstable .
 There are two Dockerfiles:
 
 * `Dockerfile` for **amd64** (x86_64). Based on `cm2network/steamcmd`.
-* `Dockerfile.arm64` for **arm64** (aarch64). Based on `ubuntu:22.04`, builds Box86/Box64 and emulates the x86/x64 binaries. Build it on a native ARM64 host:
+* `Dockerfile.arm64` for **arm64** (aarch64). Based on `ubuntu:22.04`, builds Box64 from source and uses QEMU i386 + Box64 to emulate the x86/x64 binaries. Build it on a native ARM64 host:
 
 ```bash
 docker build --no-cache --build-arg STEAMAPPBRANCH=unstable -f Dockerfile.arm64 -t ghcr.io/vensauro/project-zomboid-server-docker:unstable-arm64 .

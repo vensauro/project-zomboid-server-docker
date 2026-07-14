@@ -1,20 +1,23 @@
 ############################################################
 # Dockerfile that builds a Project Zomboid Gameserver for ARM64
 #
-# SteamCMD and the Zomboid dedicated server only ship x86/x64
-# binaries, so on ARM64 we emulate them with Box86 (x86, used for
-# SteamCMD) and Box64 (x64, used for Zomboid's bundled JRE),
-# following the same approach as
-# https://github.com/Dyarven/zomboid-server-on-arm
+# SteamCMD (x86 32-bit) and Zomboid's bundled JRE (x86_64) only
+# ship Intel binaries, so on ARM64 we emulate them:
 #
-# Because Docker build runs unprivileged (no binfmt_misc), the x86
-# and x64 binaries are wrapped with small shell shims that invoke
-# box86/box64 explicitly. The runtime layout matches the upstream
-# cm2network/steamcmd image so the same entry.sh is shared.
+#   * SteamCMD  -> qemu-i386 (pure software emulation, works on
+#                 every ARM64 CPU including Ampere Neoverse which
+#                 has no AArch32 mode, so Box86 cannot be used)
+#   * Zomboid   -> Box64 (x86_64 -> AArch64 dynarec, fast)
+#
+# Because Docker build runs unprivileged (no binfmt_misc), the
+# foreign-architecture ELF binaries are wrapped with small shell
+# shims that invoke qemu-i386-static / box64 explicitly. The
+# runtime layout mirrors the upstream cm2network/steamcmd image so
+# the same entry.sh is shared with amd64.
 #
 # Build natively on an ARM64 host (e.g. the GitHub-hosted
-# ubuntu-24.04-arm runner) -- do NOT cross-build via QEMU, the
-# Box86/Box64 compile would be extremely slow.
+# ubuntu-24.04-arm runner). Do NOT cross-build via QEMU -- the
+# Box64 compile would be extremely slow.
 ############################################################
 FROM ubuntu:22.04
 
@@ -43,7 +46,7 @@ ENV BOX64_DYNAREC_BIGBLOCK=0
 ENV BOX64_DYNAREC_STRONGMEM=1
 
 # ---------------------------------------------------------
-# 1. Base packages + locales
+# 1. Base packages + locales + QEMU user-mode emulation
 # ---------------------------------------------------------
 RUN apt-get update \
   && apt-get install -y --no-install-recommends --no-install-suggests \
@@ -51,6 +54,7 @@ RUN apt-get update \
     curl \
     dos2unix \
     locales \
+    qemu-user-static \
     sudo \
     tzdata \
   && sed -i 's/^# *\(es_ES.UTF-8\)/\1/' /etc/locale.gen \
@@ -59,39 +63,39 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------
-# 2. armhf multiarch: Box86 emits AArch32 code, so the x86
-#    SteamCMD binary needs 32-bit ARM shared libraries.
+# 2. i386 multiarch: SteamCMD is x86 (32-bit) and runs under
+#    qemu-i386-static, which needs the i386 shared libraries
+#    (loader + libc + the libs steamcmd links against).
 # ---------------------------------------------------------
-RUN dpkg --add-architecture armhf \
+RUN dpkg --add-architecture i386 \
   && apt-get update \
   && apt-get install -y --no-install-recommends --no-install-suggests \
-    libc6:armhf \
-    libstdc++6:armhf \
-    libncurses5:armhf \
-    zlib1g:armhf \
+    libc6:i386 \
+    libstdc++6:i386 \
+    libncurses5:i386 \
+    zlib1g:i386 \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------
-# 3. Build Box86 (x86 emulation, for SteamCMD) and
-#    Box64 (x64 emulation, for Zomboid's JRE).
+# 3. Build Box64 (x64 -> AArch64 dynarec, for Zomboid's JRE).
+#    Box64 is a pure AArch64 project and builds natively with gcc.
+#    It requires python3 at configure time.
 # ---------------------------------------------------------
 RUN apt-get update \
   && apt-get install -y --no-install-recommends --no-install-suggests \
     git \
     build-essential \
     cmake \
-  && git clone --depth 1 https://github.com/ptitSeb/box86.git /tmp/box86 \
-  && cmake -S /tmp/box86 -B /tmp/box86/build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  && cmake --build /tmp/box86/build --parallel "$(nproc)" \
-  && cmake --install /tmp/box86/build \
-  && rm -rf /tmp/box86 \
+    python3 \
   && git clone --depth 1 https://github.com/ptitSeb/box64.git /tmp/box64 \
-  && cmake -S /tmp/box64 -B /tmp/box64/build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  && cmake -S /tmp/box64 -B /tmp/box64/build \
+    -DARM_DYNAREC=ON \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   && cmake --build /tmp/box64/build --parallel "$(nproc)" \
   && cmake --install /tmp/box64/build \
   && rm -rf /tmp/box64 \
-  && apt-get purge -y --auto-remove git build-essential cmake \
+  && apt-get purge -y --auto-remove git build-essential cmake python3 \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
@@ -104,7 +108,7 @@ RUN set -x \
   && chown -R "${USER}:${USER}" "${HOMEDIR}"
 
 # ---------------------------------------------------------
-# 5. Install SteamCMD (linux32 build, runs under box86)
+# 5. Install SteamCMD (linux32 build, runs under qemu-i386)
 # ---------------------------------------------------------
 USER ${USER}
 WORKDIR ${STEAMCMDDIR}
@@ -114,17 +118,21 @@ RUN curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.t
 USER root
 
 # ---------------------------------------------------------
-# 6. Wrap the x86 SteamCMD binaries with box86 shims.
-#    steamcmd.sh is a bash wrapper that execs linux32/steamcmd,
-#    so wrapping the ELF binary is enough.
+# 6. Wrap every x86 (i386) SteamCMD ELF binary with a
+#    qemu-i386-static shim. steamcmd.sh is a bash wrapper that
+#    execs linux32/steamcmd, so wrapping the ELF is enough; any
+#    other i386 helper steamcmd may spawn lives in linux32/ too
+#    and is wrapped by the same loop. (binfmt_misc not required)
 # ---------------------------------------------------------
 RUN set -ex; \
-    for bin in steamcmd steamerror steam; do \
-      target="${STEAMCMDDIR}/linux32/${bin}"; \
-      if [ -f "${target}" ] && [ ! -e "${target}.real" ]; then \
-        mv "${target}" "${target}.real"; \
-        printf '#!/bin/sh\nexec box86 "%s.real" "$@"\n' "${target}" > "${target}"; \
-        chmod +x "${target}"; \
+    for f in "${STEAMCMDDIR}/linux32"/*; do \
+      [ -f "$f" ] || continue; \
+      [ -e "${f}.real" ] && continue; \
+      magic="$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')"; \
+      if [ "${magic}" = "7f454c46" ]; then \
+        mv "$f" "${f}.real"; \
+        printf '#!/bin/sh\nexec qemu-i386-static "%s.real" "$@"\n' "$f" > "$f"; \
+        chmod +x "$f"; \
       fi; \
     done
 
