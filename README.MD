@@ -40,6 +40,8 @@ On **arm64** (Raspberry Pi 4/5, OCI Ampere A1, AWS Graviton, Apple Silicon via D
 
 Box64 is built from source and baked into the arm64 image, and the game's bundled JRE is wrapped so `start-server.sh` works unchanged. The approach is adapted from [`Dyarven/zomboid-server-on-arm`](https://github.com/Dyarven/zomboid-server-on-arm).
 
+If the server's Java VM crashes in generated/JIT code on a particular ARM CPU, set `BOX64_DYNAREC=0` in `.env` as a compatibility fallback. This disables Box64's dynamic recompiler and is substantially slower, so use it only to confirm or work around that CPU-specific issue.
+
 Caveats for arm64:
 
 * Performance is lower than a native x86_64 server (emulation overhead). Expect longer startup times and higher CPU usage.
