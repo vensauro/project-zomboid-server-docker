@@ -9,6 +9,8 @@ services:
       args:
         # Reads STEAMAPPBRANCH from your .env file to set the build version (ARG).
         - STEAMAPPBRANCH=${STEAMAPPBRANCH:-public}
+        # Server files are published by the native-amd64 SteamCMD build.
+        - PZ_CONTENT_IMAGE=${PZ_CONTENT_IMAGE:-ghcr.io/vensauro/project-zomboid-server-files:latest}
     env_file:
       - .env
     ports:

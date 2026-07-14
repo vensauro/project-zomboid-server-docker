@@ -9,12 +9,20 @@ cd ${STEAMAPPDIR}
 #####################################
 
 if [ "${FORCESTEAMCLIENTSOUPDATE}" == "1" ] || [ "${FORCESTEAMCLIENTSOUPDATE,,}" == "true" ]; then
+  if [ "$(uname -m)" = "aarch64" ]; then
+    echo "*** ERROR: FORCESTEAMCLIENTSOUPDATE is not available on ARM64 images. Rebuild or pull a newer image instead. ***"
+    exit 1
+  fi
   echo "FORCESTEAMCLIENTSOUPDATE variable is set, updating steamclient.so in Zomboid's server"
   cp "${STEAMCMDDIR}/linux64/steamclient.so" "${STEAMAPPDIR}/linux64/steamclient.so"
   cp "${STEAMCMDDIR}/linux32/steamclient.so" "${STEAMAPPDIR}/steamclient.so"
 fi
 
 if [ "${FORCEUPDATE}" == "1" ] || [ "${FORCEUPDATE,,}" == "true" ]; then
+  if [ "$(uname -m)" = "aarch64" ]; then
+    echo "*** ERROR: FORCEUPDATE is not available on ARM64 images. Rebuild or pull a newer image instead. ***"
+    exit 1
+  fi
   echo "FORCEUPDATE variable is set, so the server will be updated right now"
   bash "${STEAMCMDDIR}/steamcmd.sh" +force_install_dir "${STEAMAPPDIR}" +login anonymous +app_update "${STEAMAPPID}" -beta "${STEAMAPPBRANCH}" validate +quit
 fi

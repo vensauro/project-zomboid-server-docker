@@ -1,6 +1,10 @@
-###########################################################
-# Dockerfile that builds a Project Zomboid Gameserver
-###########################################################
+# syntax=docker/dockerfile:1
+# Dockerfile that builds the amd64 Project Zomboid Gameserver.
+# SteamCMD runs once in Dockerfile.content; this stage only copies its output.
+ARG PZ_CONTENT_IMAGE=ghcr.io/vensauro/project-zomboid-server-files:latest
+ARG PZ_CONTENT_PLATFORM=linux/amd64
+FROM --platform=${PZ_CONTENT_PLATFORM} ${PZ_CONTENT_IMAGE} AS pz-content
+
 FROM cm2network/steamcmd:root
 
 LABEL maintainer="daniel.carrasco@electrosoftcloud.com"
@@ -28,25 +32,9 @@ RUN sed -i 's/^# *\(es_ES.UTF-8\)/\1/' /etc/locale.gen \
   # Generate locale
   && locale-gen
 
-# Download the Project Zomboid dedicated server using the steamcmd app.
-# Anonymous steamcmd login frequently fails in CI/Docker with
-# "Waiting for user info...ERROR! (Timed out)", which is a transient
-# Steam-network issue. SteamCMD's exit code is unreliable (it can be
-# non-zero even on a successful download), so we retry until the app
-# files actually appear on disk.
-RUN set -x \
-  && mkdir -p "${STEAMAPPDIR}" \
-  && chown -R "${USER}:${USER}" "${STEAMAPPDIR}" \
-  && for i in 1 2 3 4 5; do \
-       bash "${STEAMCMDDIR}/steamcmd.sh" +force_install_dir "${STEAMAPPDIR}" \
-         +login anonymous \
-         +app_update "${STEAMAPPID}" -beta "${STEAMAPPBRANCH}" validate \
-         +quit || true; \
-       if [ -f "${STEAMAPPDIR}/start-server.sh" ]; then break; fi; \
-       echo "*** steamcmd attempt $i did not finish the download, retrying in 15s... ***"; \
-       sleep 15; \
-     done; \
-     [ -f "${STEAMAPPDIR}/start-server.sh" ]
+# SteamCMD downloaded this directory natively in Dockerfile.content. Copying
+# from the OCI image does not execute its amd64 binaries.
+COPY --from=pz-content --chown=${USER}:${USER} /home/steam/pz-dedicated/ "${STEAMAPPDIR}/"
 
 # Copy the entry point file
 COPY --chown=${USER}:${USER} scripts/entry.sh /server/scripts/entry.sh

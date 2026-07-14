@@ -1,6 +1,6 @@
 # Project Zomboid dedicated server container
 
-This Dockerfile downloads the Project Zombie dedicated server using SteamCMD. Will allow you to deploy with ease a server in Kubernetes, Docker...
+This image packages the Project Zomboid dedicated server for Docker and Kubernetes.
 
 The ready to use image is available on the GitHub Container Registry:
 
@@ -16,6 +16,8 @@ docker pull ghcr.io/vensauro/project-zomboid-server-docker:latest
 
 > To `docker pull` without authentication on the VPS, the package must be set to **Public** in GitHub under `https://github.com/users/vensauro/packages/container/project-zomboid-server-docker/settings`. Otherwise authenticate with a Personal Access Token that has `read:packages` scope.
 
+Local builds also pull the shared `project-zomboid-server-files` content image. Make that package public too, or authenticate to GHCR before building.
+
 The original upstream image (`danixu86/project-zomboid-dedicated-server` on Docker Hub) is still compatible if you prefer it.
 
 > **Note:** If you want to play **Build 42** multiplayer, you must set the `STEAMAPPBRANCH` [environment variable](#environment-variables) to `unstable` (or use the `latest-unstable` tag).
@@ -26,23 +28,23 @@ The published image is a single **multi-arch manifest**, so the correct architec
 
 | Tag | amd64 (x86_64) | arm64 (aarch64) |
 | --- | :---: | :---: |
-| `latest` | Native | QEMU i386 + Box64 emulation |
-| `latest-unstable` | Native | QEMU i386 + Box64 emulation |
+| `latest` | Native | Shared server files + Box64 emulation |
+| `latest-unstable` | Native | Shared server files + Box64 emulation |
 
 On **amd64** the image runs the SteamCMD and Zomboid binaries natively.
 
-On **arm64** (Raspberry Pi 4/5, OCI Ampere A1, AWS Graviton, Apple Silicon via Docker, ...) the SteamCMD and Zomboid binaries are x86/x64, so they run through emulation:
+On **arm64** (Raspberry Pi 4/5, OCI Ampere A1, AWS Graviton, Apple Silicon via Docker, ...) Zomboid's bundled JVM is x86_64 and runs through emulation:
 
-* **SteamCMD** (x86 32-bit) runs under **QEMU i386** user-mode emulation (`qemu-i386-static`). QEMU is pure software emulation and works on every ARM64 CPU, including Ampere Neoverse (N1/N2) and ARMv9 cores that lack the AArch32 mode Box86 would need.
+* **SteamCMD** runs only on the native amd64 GitHub runner. The downloaded server files are published as a content image and copied into both final architectures; copying OCI layers does not execute SteamCMD on ARM.
 * **Zomboid server** (x86_64 JRE) runs under [**Box64**](https://github.com/ptitSeb/box64) (x86_64 → AArch64 dynarec), which is much faster than QEMU for the heavy Java workload.
 
-Box64 is built from source and baked into the arm64 image, and the game's bundled JRE and SteamCMD are wrapped with shell shims so `start-server.sh` works unchanged. The approach is adapted from [`Dyarven/zomboid-server-on-arm`](https://github.com/Dyarven/zomboid-server-on-arm) (which uses Box86+Box64 and therefore only works on AArch32-capable CPUs like the Raspberry Pi).
+Box64 is built from source and baked into the arm64 image, and the game's bundled JRE is wrapped so `start-server.sh` works unchanged. The approach is adapted from [`Dyarven/zomboid-server-on-arm`](https://github.com/Dyarven/zomboid-server-on-arm).
 
 Caveats for arm64:
 
 * Performance is lower than a native x86_64 server (emulation overhead). Expect longer startup times and higher CPU usage.
 * Build is performed natively on GitHub's `ubuntu-24.04-arm` runner (no QEMU-system, no cross-build), which keeps build times reasonable.
-* The arm64 image is based on `ubuntu:22.04` (instead of `cm2network/steamcmd`) because QEMU/Box64 need the foreign-architecture (`i386`) libraries, and Box64 is compiled in place.
+* The arm64 image is based on `ubuntu:22.04`; Box64 is compiled in place.
 
 **WARNING:** Running the image on Windows using WSL2 in Docker Desktop will make the server startup times significantly slower. This is fine unless you are running alot of mods in which case server startup times may vary from 15 - 40 minutes. The best way to solve this problem is to run your container on a Linux based system or in a Linux VM.
 
@@ -66,9 +68,9 @@ This image uses some env variables as arguments in the server command, allowing 
 
 `DEBUG:` Enable the debug mode in server
 
-`FORCEUPDATE:` Force a server update on every start. This process can be slow if the image is old.
+`FORCEUPDATE:` Force a server update on every start. This is supported on amd64 only. On arm64, pull or rebuild a newer image instead.
 
-`FORCESTEAMCLIENTSOUPDATE:` Forcibly update the steamclient.so libraries in the pz-dedicated directory before starting the server. May help with Workshop item downloads. Do not set if everything works fine.
+`FORCESTEAMCLIENTSOUPDATE:` Forcibly update the steamclient.so libraries in the pz-dedicated directory before starting the server. May help with Workshop item downloads. Supported on amd64 only; do not set if everything works fine.
 
 `IP:` Set the interface IP where the server will listen. By default all the interfaces.
 
@@ -114,7 +116,7 @@ Maps are added on third server start, after mods are added
 
 This env variables will be used at build time to generate the image.
 
-`STEAMAPPBRANCH:` Sets the Project Zomboid branch to download (e.g., `unstable`). If not set, the stable (public) branch will be downloaded. You can see a list of branches in the [SteamDB website](https://steamdb.info/app/108600/depots/).
+`STEAMAPPBRANCH:` Selects the Project Zomboid branch content image (e.g., `unstable`). If not set, the stable (public) branch is used. For a local ARM Build 42 build, also set `PZ_CONTENT_IMAGE=ghcr.io/vensauro/project-zomboid-server-files:latest-unstable`.
 
 This will work only when using the `docker compose` command. If you are building the image using the `docker build` command, then must be passed as argument, for example:
 
@@ -125,10 +127,10 @@ docker build --compress --no-cache --build-arg STEAMAPPBRANCH=unstable .
 There are two Dockerfiles:
 
 * `Dockerfile` for **amd64** (x86_64). Based on `cm2network/steamcmd`.
-* `Dockerfile.arm64` for **arm64** (aarch64). Based on `ubuntu:22.04`, builds Box64 from source and uses QEMU i386 + Box64 to emulate the x86/x64 binaries. Build it on a native ARM64 host:
+* `Dockerfile.arm64` for **arm64** (aarch64). Based on `ubuntu:22.04`, builds Box64 from source and copies server files from the published content image. Build it on a native ARM64 host:
 
 ```bash
-docker build --no-cache --build-arg STEAMAPPBRANCH=unstable -f Dockerfile.arm64 -t ghcr.io/vensauro/project-zomboid-server-docker:unstable-arm64 .
+docker build --no-cache --build-arg STEAMAPPBRANCH=unstable --build-arg PZ_CONTENT_IMAGE=ghcr.io/vensauro/project-zomboid-server-files:latest-unstable -f Dockerfile.arm64 -t ghcr.io/vensauro/project-zomboid-server-docker:unstable-arm64 .
 ```
 
 ## Soft Reset

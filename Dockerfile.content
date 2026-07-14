@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+#
+# Download the architecture-independent Project Zomboid dedicated-server
+# files. This image is built on an amd64 runner, where SteamCMD runs natively,
+# then consumed as a filesystem-only build stage by both final images.
+FROM cm2network/steamcmd:root AS downloader
+
+ENV STEAMAPPID=380870
+ENV STEAMAPP=pz
+ENV STEAMAPPDIR="${HOMEDIR}/${STEAMAPP}-dedicated"
+ENV HOME="${HOMEDIR}"
+
+ARG STEAMAPPBRANCH="public"
+ENV STEAMAPPBRANCH=$STEAMAPPBRANCH
+
+RUN set -x \
+  && mkdir -p "${STEAMAPPDIR}" \
+  && chown -R "${USER}:${USER}" "${STEAMAPPDIR}" \
+  && for i in 1 2 3 4 5; do \
+       bash "${STEAMCMDDIR}/steamcmd.sh" \
+         +force_install_dir "${STEAMAPPDIR}" \
+         +login anonymous \
+         +app_update "${STEAMAPPID}" -beta "${STEAMAPPBRANCH}" validate \
+         +quit || true; \
+       if [ -f "${STEAMAPPDIR}/start-server.sh" ]; then break; fi; \
+       echo "*** steamcmd attempt $i did not finish the download, retrying in 15s... ***"; \
+       sleep 15; \
+     done; \
+     [ -f "${STEAMAPPDIR}/start-server.sh" ]
+
+# Keep the shared OCI image small and architecture-neutral in practice: final
+# images need the downloaded game directory, not SteamCMD itself.
+FROM scratch
+COPY --from=downloader /home/steam/pz-dedicated/ /home/steam/pz-dedicated/

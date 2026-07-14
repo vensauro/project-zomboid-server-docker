@@ -9,6 +9,7 @@ on:
     paths:
       - "Dockerfile"
       - "Dockerfile.arm64"
+      - "Dockerfile.content"
       - "scripts/**"
       - ".github/workflows/docker-image.yml"
   workflow_dispatch:
@@ -20,26 +21,75 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE: ghcr.io/${{ github.repository_owner }}/project-zomboid-server-docker
+  CONTENT_IMAGE: ghcr.io/${{ github.repository_owner }}/project-zomboid-server-files
 
 jobs:
-  build:
-    name: Build (${{ matrix.platform }} / ${{ matrix.branch }})
+  server-files:
+    name: Download server files (${{ matrix.branch }})
     strategy:
       fail-fast: false
       matrix:
-        platform: [amd64, arm64]
-        branch: [public, unstable]
         include:
-          - platform: amd64
-            runner: ubuntu-latest
-            dockerfile: Dockerfile
-          - platform: arm64
-            runner: ubuntu-24.04-arm
-            dockerfile: Dockerfile.arm64
           - branch: public
             tag_suffix: ""
           - branch: unstable
             tag_suffix: "-unstable"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download and publish server files
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.content
+          push: true
+          build-args: |
+            STEAMAPPBRANCH=${{ matrix.branch }}
+          cache-from: type=gha,scope=server-files-${{ matrix.branch }}
+          cache-to: type=gha,mode=max,scope=server-files-${{ matrix.branch }}
+          tags: |
+            ${{ env.CONTENT_IMAGE }}:latest${{ matrix.tag_suffix }}
+            ${{ env.CONTENT_IMAGE }}:${{ github.sha }}${{ matrix.tag_suffix }}
+
+  build:
+    name: Build (${{ matrix.platform }} / ${{ matrix.branch }})
+    needs: server-files
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: amd64
+            branch: public
+            tag_suffix: ""
+            runner: ubuntu-latest
+            dockerfile: Dockerfile
+          - platform: arm64
+            branch: public
+            tag_suffix: ""
+            runner: ubuntu-24.04-arm
+            dockerfile: Dockerfile.arm64
+          - platform: amd64
+            branch: unstable
+            tag_suffix: "-unstable"
+            runner: ubuntu-latest
+            dockerfile: Dockerfile
+          - platform: arm64
+            branch: unstable
+            tag_suffix: "-unstable"
+            runner: ubuntu-24.04-arm
+            dockerfile: Dockerfile.arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
@@ -64,6 +114,7 @@ jobs:
           push: true
           build-args: |
             STEAMAPPBRANCH=${{ matrix.branch }}
+            PZ_CONTENT_IMAGE=${{ env.CONTENT_IMAGE }}:${{ github.sha }}${{ matrix.tag_suffix }}
           cache-from: type=gha,scope=${{ matrix.platform }}-${{ matrix.branch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}-${{ matrix.branch }}
           tags: |
