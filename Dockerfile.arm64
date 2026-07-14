@@ -66,8 +66,18 @@ RUN apt-get update \
 # 2. i386 multiarch: SteamCMD is x86 (32-bit) and runs under
 #    qemu-i386-static, which needs the i386 shared libraries
 #    (loader + libc + the libs steamcmd links against).
+#
+#    The arm64 ubuntu image only ships ports.ubuntu.com sources,
+#    which do NOT carry i386 packages, so we restrict ports to
+#    [arch=arm64] and add archive.ubuntu.com for [arch=i386].
 # ---------------------------------------------------------
-RUN dpkg --add-architecture i386 \
+RUN set -x \
+  && sed -i 's|deb http://ports.ubuntu.com|deb [arch=arm64] http://ports.ubuntu.com|g' /etc/apt/sources.list \
+  && { echo "deb [arch=i386] http://archive.ubuntu.com/ubuntu jammy main restricted universe"; \
+       echo "deb [arch=i386] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe"; \
+       echo "deb [arch=i386] http://archive.ubuntu.com/ubuntu jammy-security main restricted universe"; \
+     } >> /etc/apt/sources.list \
+  && dpkg --add-architecture i386 \
   && apt-get update \
   && apt-get install -y --no-install-recommends --no-install-suggests \
     libc6:i386 \
