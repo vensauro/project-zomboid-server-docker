@@ -12,8 +12,13 @@ ENV HOME="${HOMEDIR}"
 
 ARG STEAMAPPBRANCH="public"
 ENV STEAMAPPBRANCH=$STEAMAPPBRANCH
+# Intentionally changes for scheduled/manual content refreshes. Normal final
+# image builds never build this Dockerfile, so code deploys reuse the existing
+# content image rather than downloading from Steam again.
+ARG CONTENT_REFRESH=manual
 
 RUN set -x \
+  && echo "Refreshing Steam content: ${CONTENT_REFRESH}" \
   && mkdir -p "${STEAMAPPDIR}" \
   && chown -R "${USER}:${USER}" "${STEAMAPPDIR}" \
   && for i in 1 2 3 4 5; do \

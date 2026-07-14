@@ -2,7 +2,9 @@ name: Docker Image CI
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    # Server-content refresh. Final image builds on push reuse the last
+    # published content image and do not contact Steam.
+    - cron: "0 3 * * *"
   push:
     branches:
       - main
@@ -13,6 +15,12 @@ on:
       - "scripts/**"
       - ".github/workflows/docker-image.yml"
   workflow_dispatch:
+    inputs:
+      refresh_server_files:
+        description: "Download the latest Project Zomboid server files before building"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -26,6 +34,9 @@ env:
 jobs:
   server-files:
     name: Download server files (${{ matrix.branch }})
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.refresh_server_files)
     strategy:
       fail-fast: false
       matrix:
@@ -57,15 +68,18 @@ jobs:
           push: true
           build-args: |
             STEAMAPPBRANCH=${{ matrix.branch }}
+            CONTENT_REFRESH=${{ github.run_id }}
           cache-from: type=gha,scope=server-files-${{ matrix.branch }}
           cache-to: type=gha,mode=max,scope=server-files-${{ matrix.branch }}
           tags: |
             ${{ env.CONTENT_IMAGE }}:latest${{ matrix.tag_suffix }}
-            ${{ env.CONTENT_IMAGE }}:${{ github.sha }}${{ matrix.tag_suffix }}
 
   build:
     name: Build (${{ matrix.platform }} / ${{ matrix.branch }})
     needs: server-files
+    if: >-
+      always() &&
+      (needs.server-files.result == 'success' || needs.server-files.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -114,7 +128,7 @@ jobs:
           push: true
           build-args: |
             STEAMAPPBRANCH=${{ matrix.branch }}
-            PZ_CONTENT_IMAGE=${{ env.CONTENT_IMAGE }}:${{ github.sha }}${{ matrix.tag_suffix }}
+            PZ_CONTENT_IMAGE=${{ env.CONTENT_IMAGE }}:latest${{ matrix.tag_suffix }}
           cache-from: type=gha,scope=${{ matrix.platform }}-${{ matrix.branch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}-${{ matrix.branch }}
           tags: |

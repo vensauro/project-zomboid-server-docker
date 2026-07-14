@@ -18,6 +18,8 @@ docker pull ghcr.io/vensauro/project-zomboid-server-docker:latest
 
 Local builds also pull the shared `project-zomboid-server-files` content image. Make that package public too, or authenticate to GHCR before building.
 
+The GitHub workflow refreshes that content image once daily. Regular pushes rebuild the container logic using the already-published server files, without downloading them from Steam again. To force a game-content refresh, use **Actions → Docker Image CI → Run workflow** and enable **Download the latest Project Zomboid server files before building**.
+
 The original upstream image (`danixu86/project-zomboid-dedicated-server` on Docker Hub) is still compatible if you prefer it.
 
 > **Note:** If you want to play **Build 42** multiplayer, you must set the `STEAMAPPBRANCH` [environment variable](#environment-variables) to `unstable` (or use the `latest-unstable` tag).
